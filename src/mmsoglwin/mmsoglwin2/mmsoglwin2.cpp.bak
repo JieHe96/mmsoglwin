@@ -1,0 +1,1182 @@
+/*
+Copyright (c) 2016, Intel Corporation All Rights Reserved.
+ 
+The source code, information and material ("Material") contained herein is owned by Intel Corporation 
+or its suppliers or licensors, and title to such Material remains with Intel Corporation or its 
+suppliers or licensors. The Material contains proprietary information of Intel or its suppliers 
+and licensors. The Material is protected by worldwide copyright laws and treaty provisions. No part of 
+the Material may be used, copied, reproduced, modified, published, uploaded, posted, transmitted, 
+distributed or disclosed in any way without Intel's prior express written permission. 
+No license under any patent, copyright or other intellectual property rights in the Material is granted 
+to or conferred upon you, either expressly, by implication, inducement, estoppel or otherwise. Any 
+license under such intellectual property rights must be express and approved by Intel in writing.
+ 
+Unless otherwise agreed by Intel in writing, you may not remove or alter this notice or any other 
+notice embedded in Materials by Intel or Intels suppliers or licensors in any way.*/
+
+/*!
+ *  \file mmsoglwin.cpp
+ *  \brief Implementation for mms opengl example.  This sample code plays six videos video mapped to a single quad.  The various videos are tiled across the quad by modifying texture coordinates in the pixel shader and dynamically selecting 1 of 6 texture samplers to sample video data from at runtime.  Simple zoom and pan fatures are available using the mouse wheel and arrow keys."
+*/
+
+#include "mmsoglwin2.h"
+#include <GL\gl.h>
+#include <GL\glu.h>
+#include "..\..\gl\glext.h"
+#include "..\..\gl\glcorearb.h"
+#include "..\..\gl\wglext.h"
+#include "simpleDX9Device.h"
+#include "..\..\decode\include\pipeline_decode.h"
+
+#include <iostream>
+#include <fstream>
+
+#define CREATEOGLPFN(PFN,FUNC) \
+	extern PFN FUNC; \
+	PFN FUNC = NULL;
+
+CREATEOGLPFN(PFNGLCREATEPROGRAMPROC,glCreateProgram);
+CREATEOGLPFN(PFNGLDELETEPROGRAMPROC,glDeleteProgram);
+CREATEOGLPFN(PFNGLUSEPROGRAMPROC,glUseProgram);
+CREATEOGLPFN(PFNGLATTACHSHADERPROC,glAttachShader);
+CREATEOGLPFN(PFNGLDETACHSHADERPROC,glDetachShader);
+CREATEOGLPFN(PFNGLLINKPROGRAMPROC,glLinkProgram);
+CREATEOGLPFN(PFNGLGETPROGRAMIVPROC,glGetProgramiv);
+CREATEOGLPFN(PFNGLGETSHADERINFOLOGPROC,glGetShaderInfoLog);
+CREATEOGLPFN(PFNGLGETUNIFORMLOCATIONPROC,glGetUniformLocation);
+CREATEOGLPFN(PFNGLUNIFORM1IPROC,glUniform1i);
+CREATEOGLPFN(PFNGLUNIFORM1IVPROC,glUniform1iv);
+CREATEOGLPFN(PFNGLUNIFORM2IVPROC,glUniform2iv);
+CREATEOGLPFN(PFNGLUNIFORM3IVPROC,glUniform3iv);
+CREATEOGLPFN(PFNGLUNIFORM4IVPROC,glUniform4iv);
+CREATEOGLPFN(PFNGLUNIFORM1FPROC,glUniform1f);
+CREATEOGLPFN(PFNGLUNIFORM1FVPROC,glUniform1fv);
+CREATEOGLPFN(PFNGLUNIFORM2FVPROC,glUniform2fv);
+CREATEOGLPFN(PFNGLUNIFORM3FVPROC,glUniform3fv);
+CREATEOGLPFN(PFNGLUNIFORM4FVPROC,glUniform4fv);
+CREATEOGLPFN(PFNGLUNIFORMMATRIX4FVPROC,glUniformMatrix4fv);
+CREATEOGLPFN(PFNGLGETATTRIBLOCATIONPROC,glGetAttribLocation);
+CREATEOGLPFN(PFNGLVERTEXATTRIB1FPROC,glVertexAttrib1f);
+CREATEOGLPFN(PFNGLVERTEXATTRIB1FVPROC,glVertexAttrib1fv);
+CREATEOGLPFN(PFNGLVERTEXATTRIB2FVPROC,glVertexAttrib2fv);
+CREATEOGLPFN(PFNGLVERTEXATTRIB3FVPROC,glVertexAttrib3fv);
+CREATEOGLPFN(PFNGLVERTEXATTRIB4FVPROC,glVertexAttrib4fv);
+CREATEOGLPFN(PFNGLENABLEVERTEXATTRIBARRAYPROC,glEnableVertexAttribArray);
+CREATEOGLPFN(PFNGLBINDATTRIBLOCATIONPROC,glBindAttribLocation);
+CREATEOGLPFN(PFNGLACTIVETEXTUREPROC,glActiveTexture);
+CREATEOGLPFN(PFNGLCREATESHADERPROC,glCreateShader);
+CREATEOGLPFN(PFNGLDELETESHADERPROC,glDeleteShader);
+CREATEOGLPFN(PFNGLSHADERSOURCEPROC,glShaderSource);
+CREATEOGLPFN(PFNGLCOMPILESHADERPROC,glCompileShader);
+CREATEOGLPFN(PFNGLGETSHADERIVPROC,glGetShaderiv);
+CREATEOGLPFN(PFNGLGENBUFFERSPROC,glGenBuffers);
+CREATEOGLPFN(PFNGLBINDBUFFERPROC,glBindBuffer);
+CREATEOGLPFN(PFNGLBUFFERDATAPROC,glBufferData);
+CREATEOGLPFN(PFNGLVERTEXATTRIBPOINTERPROC,glVertexAttribPointer);
+CREATEOGLPFN(PFNWGLDXSETRESOURCESHAREHANDLENVPROC,wglDXSetResourceShareHandleNV);
+CREATEOGLPFN(PFNWGLDXOPENDEVICENVPROC,wglDXOpenDeviceNV);
+CREATEOGLPFN(PFNWGLDXCLOSEDEVICENVPROC,wglDXCloseDeviceNV);
+CREATEOGLPFN(PFNWGLDXREGISTEROBJECTNVPROC, wglDXRegisterObjectNV);
+CREATEOGLPFN(PFNWGLDXUNREGISTEROBJECTNVPROC,wglDXUnregisterObjectNV);
+CREATEOGLPFN(PFNWGLDXOBJECTACCESSNVPROC,wglDXObjectAccessNV);
+CREATEOGLPFN(PFNWGLDXLOCKOBJECTSNVPROC,wglDXLockObjectsNV);
+CREATEOGLPFN(PFNWGLDXUNLOCKOBJECTSNVPROC,wglDXUnlockObjectsNV);
+
+mfxStatus sts = MFX_ERR_NONE;						/*!< Media SDK return value check */
+CDecodingPipeline *PipelinePtrs[MAXVIDEOCLIPS];		/*!< Global pipeline array for decoding. */
+sInputParams *ParamsPtrs[MAXVIDEOCLIPS];			/*!< Global pointer array for decode configuration. */
+LPDIRECT3DSURFACE9 videoframeptrs[MAXVIDEOCLIPS];	/*!< An array of direct X surfaces to hold video frames. */
+HINSTANCE hInst;									/*!< Current hInst for our application.  */
+TCHAR szTitle[MAX_LOADSTRING];						/*!< Title bar text for this application. */
+TCHAR szWindowClass[MAX_LOADSTRING];				/*!< The main window class name. */
+HDC hDC;											/*!< Handle to device context. */
+HGLRC hRC;											/*!< Handle to OpenGL context. */
+SimpleDXDevice	*testdx = NULL;						/*!< A simple DirectX device. */
+bool m_bTextureInitialized = false;					/*!< Texture init flag. */
+int m_cx=0, m_cy=0;										/*!< Width and height of the window frame during resizing. */
+float nZoom = 1.0;									/*!< A zoom value that is tied to the mouse wheel. */
+int fps = 0;										/*!< Fps tracker variable. */
+int framecounter = 0;								/*!< Framecounter for computing fps. */
+float xoffsetcurrent = 0.0f;						/*!< Application variable to track x offset. */
+float yoffsetcurrent = 0.0f;						/*!< Application variable to track y offset. */
+float offsetincrement = 0.01f;						/*!< Increment that panning moves when you press arrow keys. */
+float apptexcoordscalar = 100000.0f;				/*!< Application value for scalar multiplier for texture coordinates. */
+float appxtexcoordmultiplier = (float)NUMVIDEOROW;	/*!< Application value for number videos in each row*/
+float appytexcoordmultiplier = (float)NUMVIDEOCOL;  /*!< Application value for number videos in each column*/
+float appnumvideos = (float)MAXVIDEOCLIPS;
+float tileincrement = 1.0f;
+
+GLuint m_h264TextureArray[MAXVIDEOCLIPS];			/*!< GL texture for video N */
+HANDLE m_hH264DeviceArray[MAXVIDEOCLIPS];			/*!< Device value returned from NV_DX_Interop for video N */
+HANDLE m_hH264TextureArray[MAXVIDEOCLIPS];			/*!< Texture value returned from NV_DX_Interop for video N */
+GLuint testdtexArray[MAXVIDEOCLIPS];				/*!< dtex[N] Handle to texture sampler. */
+
+GLuint testxoffset = 0;								/*!< xoffset Handle to vertex shader. */
+GLuint testyoffset = 0;								/*!< yoffset Handle vertex shader. */
+GLuint glvertexshader = 0;										/*!< The vertex shader for this application. */
+GLuint glfragmentshader = 0;										/*!< The fragment shader for this application. */
+GLuint shader_programme = 0;						/*!< The final shader program for this application. */
+
+GLuint texcoordscalar = 0;							/*!< Scalar multiplier for texture coordinates. */
+GLuint xtexcoordmultiplier = 0;						/*!< Number videos in each row*/
+GLuint ytexcoordmultiplier = 0;						/*!< Number videos in each column*/
+GLuint numvideos = 0;								/*!< Total number of videos*/
+
+//! Vertex shader for this program.
+//! This is a simple vertex shader.  Uniform variables xoffset and yoffset are used to modify the geometry position based on user input from the arrow keys to give a simple panning feature.  Combined with zoom (attached to mouse wheel) this allows user to zoom in on the video data to observe quality at a closer level in a simple manner. See USESHADER in stdafx.h.  Comment out USESHADER to render without the fragment or vertex shader loaded. */
+const char* vertex_shader =
+"uniform float xoffset;"
+"uniform float yoffset;"
+"varying vec2 vTexCoord;"
+"void main(void)"
+"{"
+"   vec4 a = gl_Vertex;"
+"   a.x = a.x*(-1.0) + xoffset;"
+"   a.y = a.y + yoffset;"
+"   vTexCoord = gl_MultiTexCoord0.xy;"
+"   gl_Position = a;"
+"}";
+
+#if 0
+//! Fragment shader for this program.
+//! This is a simple fragment shader that tiles the videos to the screen.  Uniform variable array dtex[] is an array of texture samplers.  An array is use to dynamically choose what video to sample from at runtime.  This avoid extra texture reads in the fragment shader.  The number of tiles is hard coded to 6 but could be parameterized if needed.  Alternatively, you can turn off the shader and not use it.  See USESHADER in stdafx.h.  Comment out USESHADER to render without the fragment or vertex shader loaded. */
+const char* fragment_shader =
+"#version 400\n"
+"out vec4 frag_colour;"
+"varying vec2 vTexCoord;"
+"uniform sampler2D dtex[16];"
+"uniform float texcoordscalar;"
+"uniform float xtexcoordmultiplier;"
+"uniform float ytexcoordmultiplier;"
+"uniform float numvideos;"
+"void main () {"
+"  vec4 colorsample1 = vec4(0);"
+"  vec4 colorsample2 = vec4(0);"
+"  vec4 colorsample3 = vec4(0);"
+"  vec4 colorsample4 = vec4(0);"
+"  vec4 colorsample5 = vec4(0);"
+"  vec2 texturecoordinateoffset = vec2(0.002, 0.0001);"
+"  vec2 finaltexcoords = vec2(0.0,0.0);"
+"  float modcoordsx = vTexCoord.x*texcoordscalar;"
+"  modcoordsx = modcoordsx/(texcoordscalar/xtexcoordmultiplier);"
+"  modcoordsx = floor(modcoordsx);"
+"  float modcoordsy = vTexCoord.y*texcoordscalar;"
+"  modcoordsy = modcoordsy/(texcoordscalar/ytexcoordmultiplier);"
+"  modcoordsy = floor(modcoordsy);"
+"  highp int testindex = int(mod(modcoordsx + xtexcoordmultiplier*modcoordsy, numvideos));"
+"  finaltexcoords = vec2((vTexCoord.x - (modcoordsx/xtexcoordmultiplier))*xtexcoordmultiplier,(vTexCoord.y - (modcoordsy/ytexcoordmultiplier))*ytexcoordmultiplier);"
+"  colorsample1 = texture2D(dtex[testindex],finaltexcoords);"
+"  colorsample2 = texture2D(dtex[testindex],finaltexcoords - texturecoordinateoffset);"
+"  colorsample3 = texture2D(dtex[testindex],finaltexcoords + texturecoordinateoffset);"
+"  texturecoordinateoffset = vec2(0.0001, 0.002);"
+"  colorsample4 = texture2D(dtex[testindex],finaltexcoords - texturecoordinateoffset);"
+"  colorsample5 = texture2D(dtex[testindex],finaltexcoords + texturecoordinateoffset);"
+"  float luminance2 = (0.2126*colorsample2.r) + (0.7152*colorsample2.g) + (0.0722*colorsample1.b);"
+"  float luminance3 = (0.2126*colorsample3.r) + (0.7152*colorsample3.g) + (0.0722*colorsample1.b);"
+"  float luminance4 = (0.2126*colorsample4.r) + (0.7152*colorsample4.g) + (0.0722*colorsample1.b);"
+"  float luminance5 = (0.2126*colorsample5.r) + (0.7152*colorsample5.g) + (0.0722*colorsample1.b);"
+"  colorsample2.x = luminance2;"
+"  colorsample3.x = luminance3;"
+"  colorsample4.x = luminance4;"
+"  colorsample5.x = luminance5;"
+"  float abshorizontal = abs(colorsample2.x - colorsample3.x);"
+"  float absvertical = abs(colorsample4.x - colorsample5.x);"
+"  if((abshorizontal > 0.09)||(absvertical > 0.09))"
+"      frag_colour = colorsample1;"
+"  else"
+"      frag_colour = vec4(0,0,0,1);"
+"}";
+
+
+//"  float abshorizontal = 0.1;"
+//"  float absvertical = 0.1;"
+//"  if((abshorizontal > 0.09)||(absvertical > 0.09))"
+//"  frag_colour = colorsample1;"
+
+#else
+const char* fragment_shader =(
+"#version 400 core\r\n"
+"out vec4 frag_colour;"
+"varying vec2 vTexCoord;"
+"uniform sampler2D dtex[25];"
+"uniform float texcoordscalar;"
+"uniform float xtexcoordmultiplier;"
+"uniform float ytexcoordmultiplier;"
+"uniform float numvideos;"
+"void main () {"
+"  vec2 finaltexcoords = vec2(0.0,0.0);"
+"  float modcoordsx = floor(vTexCoord.x*xtexcoordmultiplier);"
+"  float modcoordsy = floor(vTexCoord.y*ytexcoordmultiplier);"
+"  int testindex = int(mod(modcoordsx + xtexcoordmultiplier*modcoordsy, numvideos));"
+"  finaltexcoords = vec2((vTexCoord.x - (modcoordsx/xtexcoordmultiplier))*xtexcoordmultiplier,(vTexCoord.y - (modcoordsy/ytexcoordmultiplier))*ytexcoordmultiplier);"
+"  int abshorizontal = 1;"
+"  if(abshorizontal > 0) frag_colour = texture2D(dtex[testindex],finaltexcoords);"
+"}\n");
+#endif
+//"  frag_colour = texture2D(dtex[testindex], finaltexcoords);"
+//"  frag_colour = vec4(vec3(1.0, 0.0, 0.0), 0.0);"
+//"#pragma STDGL invariant(all)\n"
+//"#pragma optimize(off)\n"
+
+//! Video clip test content array.
+//! Global array to hold test clips for the purposes of the sample application. See FULLHD_GP, UHD_GP, MIX4K_GP in stdafx.h.  These defines control while list of clips is used at runtime.  Uncomment the one you want to try and make sure the rest are commented out.  You will notice that the texture sizes in simpleDevice::CreateDevice() are hard coded to the video resolution size.  I did not have a convenient way to get the width / height at runtime.  By hard coding them I was able to be sure that the actual texture being displayed contained the true number of pixels in the video.  If you were to make the textures smaller than the video size, drivers / hw will resize the image and quality will be lost. To examine the image quality, try using the mouse wheel to zoom on the textures, use the arrow keys to pan as needed.*/
+wchar_t *videoclips[MAXPOSSIBLEVIDEOS]= {
+#if MIX4K_GP
+	L"C:/MyProject/MMSF/testcontent/test5.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test0.264", /**< Clip 2 */
+	L"C:/MyProject/MMSF/testcontent/test1.264", /**< Clip 3 */
+	L"C:/MyProject/MMSF/testcontent/test3.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test4.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test4.264", /**< Clip 4 */
+	L"C:/MyProject/MMSF/testcontent/test0.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test1.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test2.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test3.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test4.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test5.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test0.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test1.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test2.264", /**< Clip 5 */
+	L"C:/MyProject/MMSF/testcontent/test3.264", /**< Clip 5 */
+	//L"../../testcontent/test0.264", /**< Clip 2 */
+	//L"../../testcontent/test1.264", /**< Clip 3 */
+	//L"../../testcontent/test3.264", /**< Clip 5 */
+	//L"../../testcontent/test4.264", /**< Clip 5 */
+	//L"../../testcontent/test4.264", /**< Clip 4 */
+	//L"../../testcontent/test5.264", /**< Clip 5 */
+	//L"../../testcontent/test0.264", /**< Clip 5 */
+	//L"../../testcontent/test1.264", /**< Clip 5 */
+	//L"../../testcontent/test2.264", /**< Clip 5 */
+	//L"../../testcontent/test3.264", /**< Clip 5 */
+	//L"../../testcontent/test4.264", /**< Clip 5 */
+	//L"../../testcontent/test5.264", /**< Clip 5 */
+	//L"../../testcontent/test0.264", /**< Clip 5 */
+	//L"../../testcontent/test1.264", /**< Clip 5 */
+	//L"../../testcontent/test2.264", /**< Clip 5 */
+#endif
+#if MIX1280
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1280.mp4.h264",
+#endif
+#if MIX1080
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+	L"c:/MyProject/VideoClip/New_1080_High.mp4.h264",
+#endif
+#if MIX2560
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+	L"c:/MyProject/VideoClip/New_2560.mp4.h264",
+#endif
+};
+
+ATOM MyRegisterClass(HINSTANCE hInstance);
+BOOL InitInstance(HINSTANCE, int);
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
+HWND CreateOpenGLWindow(TCHAR* title, int x, int y, int width, int height, BYTE type, DWORD flags, HINSTANCE hInstance);
+void initdx(int width, int height, HINSTANCE hInstance, HWND eHwnd);
+bool bindtexture(SimpleDXDevice *pSimpleDxDevice, GLuint texture, HANDLE& hDevice, HANDLE& hTexture, int surfid);
+void display();
+void setupglfuncptrs();
+void cleanupogl();
+void cleanupdx();
+void initvideo();
+void createvideo();
+void cleanupvideo();
+void creatogltexture(void);
+bool createshaders();
+bool unbindtexture();
+
+/**
+* _tWinMain() - Main application entry point.
+* @param hInstance Handle to current instance.
+* @param hPrevInstance Handle to previous instance of application.  NULL if only one instance running.
+* @param lpCmdLine Command line for this application.
+* @param nCmdShow How the window will be shown.
+* @return Application exit code.
+*/
+int APIENTRY _tWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPTSTR lpCmdLine, _In_ int nCmdShow)
+{
+	UNREFERENCED_PARAMETER(hPrevInstance);
+	UNREFERENCED_PARAMETER(lpCmdLine);
+	MSG msg;
+	HACCEL hAccelTable;
+	LoadString(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
+	LoadString(hInstance, IDC_MMSOGLWIN, szWindowClass, MAX_LOADSTRING);
+	MyRegisterClass(hInstance);
+	if (!InitInstance (hInstance, nCmdShow)) {
+		return FALSE;
+	}
+	hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_MMSOGLWIN));
+	unsigned int Last = 0;
+	unsigned int Now = 0;
+	Last = GetTickCount();
+	wchar_t buffer[48];
+	while (GetMessage(&msg, NULL, 0, 0)) {
+		display();
+		if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg)) {
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+		}
+		InvalidateRect( msg.hwnd, NULL, FALSE );
+		Now = GetTickCount();
+		if((Now - Last) > FPS_RESOLUTION) {
+			Last = Now;
+			fps = framecounter/(FPS_RESOLUTION/1000);
+			framecounter = 0;
+			wsprintfW(buffer, L"mmsoglwin %d fps", fps);
+			SetWindowText(msg.hwnd,buffer);
+		}
+	}
+	return (int) msg.wParam;
+}
+/**
+* MyRegisterClass() - Register this window application.
+* @param hInstance Handle to current application instance.
+* @return If the function succeeds, the return value is a class atom that uniquely identifies the class being registered.
+*/
+ATOM MyRegisterClass(HINSTANCE hInstance)
+{
+	WNDCLASSEX wcex;
+	wcex.cbSize = sizeof(WNDCLASSEX);
+	wcex.style			= CS_HREDRAW | CS_VREDRAW;
+	wcex.lpfnWndProc	= WndProc;
+	wcex.cbClsExtra		= 0;
+	wcex.cbWndExtra		= 0;
+	wcex.hInstance		= hInstance;
+	wcex.hIcon			= LoadIcon(hInstance, MAKEINTRESOURCE(IDI_MMSOGLWIN));
+	wcex.hCursor		= LoadCursor(NULL, IDC_ARROW);
+	wcex.hbrBackground	= (HBRUSH)(COLOR_WINDOW+1);
+	wcex.lpszMenuName	= MAKEINTRESOURCE(IDC_MMSOGLWIN);
+	wcex.lpszClassName	= szWindowClass;
+	wcex.hIconSm		= LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+	return RegisterClassEx(&wcex);
+}
+/**
+* InitInstance() - Everything for the application is initialized in this function.  We start by creating an OGL compatible window.  Next we initialize DirectX using the hWnd for our OGL compatible window.  With DX initialized we then create our OpenGL context and grab function pointers for all the APIs we need to render our scene.  With GL initialized, we load up our vertex/fragment shaders and then create our open GL textures.  Next the video stack is initialized using the media SDK.  The last thing we do is bind the OGL textures to our DirectX shared surfaces using NV_DX_Interop.  This kind of approach is used because neither MSDK or DXVA output to OpenGL textures directly.  DirectX is also use to perform GP conversion from NV12 to ARGB color space as we reap video frames from the MSDK.  Note that USESHADER defined in stdafx.h can be turned off if you want to avoid using vertex / fragement shaders during rendering.  Just comment it out.
+* @param hInstance Handle to current application instance..
+* @param nCmdShow How the window will be shown.
+* @return Pass/Fail status.
+*/
+BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
+{
+	HWND hWnd;
+	hInst = hInstance;
+	hWnd = CreateOpenGLWindow(szTitle, 0, 0, WINDOWWIDTH, WINDOWHEIGHT, PFD_TYPE_RGBA, 0, hInstance);
+	if (!hWnd) {
+		return FALSE;
+	}
+	initdx(WINDOWWIDTH, WINDOWHEIGHT, hInstance,hWnd);
+    hDC = GetDC(hWnd);
+    hRC = wglCreateContext(hDC);
+	setupglfuncptrs();
+#ifdef USESHADER
+	createshaders();
+#endif
+	creatogltexture();
+	initvideo();
+	createvideo();
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		testdx->CreateShaderDXOffscreenPlainSurface(PipelinePtrs[i]->GetVideoWidth(), PipelinePtrs[i]->GetVideoHeight(), i);
+	}
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		bindtexture(testdx, m_h264TextureArray[i], m_hH264DeviceArray[i], m_hH264TextureArray[i], i);
+	}
+	ShowWindow(hWnd, nCmdShow);
+	UpdateWindow(hWnd);
+	return TRUE;
+}
+/**
+* WndProc() - Our windows message processing loop.  Used to deal with window resize, user input, and paint messages.
+* @param hWnd Handle to the window that generated the message.
+* @param message Actual message begin recieved.
+* @param wParam Additional message info.
+* @param lParam Additional message info.
+* @return The return value is the result of the message processing and depends on the message sent.
+*/
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	int wmId, wmEvent;
+	PAINTSTRUCT ps;
+	HDC hdc;
+
+	switch (message) {
+	case WM_COMMAND:
+		wmId    = LOWORD(wParam);
+		wmEvent = HIWORD(wParam);
+		switch (wmId) {
+		case IDM_ABOUT:
+			DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
+			break;
+		case IDM_EXIT:
+			cleanupvideo();
+			unbindtexture();
+			cleanupdx();
+			cleanupogl();
+			wglMakeCurrent(NULL, NULL);
+			ReleaseDC(hWnd,hDC);
+			wglDeleteContext(hRC);
+			DestroyWindow(hWnd);
+			break;
+		default:
+			return DefWindowProc(hWnd, message, wParam, lParam);
+		}
+		break;
+	case WM_PAINT:
+		//display();
+		//hdc = BeginPaint(hWnd, &ps);
+		//EndPaint(hWnd, &ps);
+		break;
+    case WM_SIZE:
+		m_cx = LOWORD(lParam);
+		m_cy = HIWORD(lParam);
+		wglMakeCurrent(hDC, hRC);
+		glViewport(0, 0, LOWORD(lParam), HIWORD(lParam));
+		wglMakeCurrent(NULL, NULL);
+		PostMessage(hWnd, WM_PAINT, 0, 0);
+		break;
+	case WM_DESTROY:
+		cleanupvideo();
+		cleanupdx();
+		cleanupogl();
+		wglMakeCurrent(NULL, NULL);
+		ReleaseDC(hWnd,hDC);
+		wglDeleteContext(hRC);
+		PostQuitMessage(0);
+		break;
+    case WM_MOUSEWHEEL:
+            if((short) HIWORD(wParam)< 0) {
+				nZoom = nZoom - 0.25f;
+			}
+			else {
+				nZoom = nZoom + 0.25f;
+			}
+            break;
+	case WM_KEYDOWN: 
+		switch (wParam) { 
+			case VK_LEFT: 
+                xoffsetcurrent = xoffsetcurrent - offsetincrement;    
+				break; 
+			case VK_RIGHT: 
+                xoffsetcurrent = xoffsetcurrent + offsetincrement;     
+				break; 
+			case VK_UP: 
+                yoffsetcurrent = yoffsetcurrent - offsetincrement;     
+				break; 
+			case VK_DOWN: 
+                yoffsetcurrent = yoffsetcurrent + offsetincrement;
+				break; 
+		}
+	default:
+		return DefWindowProc(hWnd, message, wParam, lParam);
+	}
+	return 0;
+}
+/**
+* About() - This is an "about" box.  It has some instructions on how to use the app in it.
+* @param hDlg Handle to the dialog box.
+* @param message Message for this handler.
+* @param wParam Additional message info..
+* @param lParam Additional message info..
+* @return The return value is the result of the message processing and depends on the message sent.
+*/
+INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam);
+	switch (message) {
+	case WM_INITDIALOG:
+		return (INT_PTR)TRUE;
+	case WM_COMMAND:
+		if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+			EndDialog(hDlg, LOWORD(wParam));
+			return (INT_PTR)TRUE;
+		}
+		break;
+	}
+	return (INT_PTR)FALSE;
+}
+/**
+* CreateOpenGLWindow() - This function just creates an OpenGL compatible window and sets the pixel format.
+* @param title Title of the window.
+* @param x Coordinate position of the window on the screen.
+* @param y Coordinate position of the window on the screen.
+* @param width Width of the window.
+* @param height height of the window.
+* @return Handle to the new OpenGL window.
+*/
+HWND CreateOpenGLWindow(TCHAR* title, int x, int y, int width, int height, 
+		   BYTE type, DWORD flags, HINSTANCE hInstance)
+{
+    int         pf;
+    HDC         hDC;
+    HWND        hWnd;
+    WNDCLASS    wc;
+
+	hWnd = CreateWindow(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW |
+			WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+			x, y, width, height, NULL, NULL, hInstance, NULL);
+
+    if (hWnd == NULL) {
+	MessageBox(NULL, L"CreateWindow() failed:  Cannot create a window.", L"Error", MB_OK);
+	return NULL;
+    }
+    hDC = GetDC(hWnd);
+	static	PIXELFORMATDESCRIPTOR pfd=
+    {
+        sizeof(PIXELFORMATDESCRIPTOR),  1,                              
+        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,               
+        PFD_TYPE_RGBA,                  
+        32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0,                              
+        PFD_MAIN_PLANE,                 
+        0, 0, 0, 0                         
+    };
+    pf = ChoosePixelFormat(hDC, &pfd);
+    if (pf == 0) {
+	MessageBox(NULL, L"ChoosePixelFormat() failed:  Cannot find a suitable pixel format.", L"Error", MB_OK); 
+	return 0;
+    } 
+    if (SetPixelFormat(hDC, pf, &pfd) == FALSE) {
+	MessageBox(NULL, L"SetPixelFormat() failed:  Cannot set format specified.", L"Error", MB_OK);
+	return 0;
+    }
+    DescribePixelFormat(hDC, pf, sizeof(PIXELFORMATDESCRIPTOR), &pfd);
+    ReleaseDC(hWnd,hDC);
+    return hWnd;
+}
+/**
+* display() - This is our main rendering loop.  Before drawing anything we need to advance to the next video frame by calling RunSingleFrameDecode().  The return from this call is a IDirect3D9Surface.  We cache the pointers to these surfaces into an array so we can call StretchRect() immediately after to convert the data from NV12 to ARGB while we copy it into our shared OpenGL/DX memory.  The actual DirectX surfaces that represent the shared memory are created inside of the simpleDX9Device::CreateDevice() function.  Calling simpleDX9Device::GetSharedSurface() grabs a IDirect3D9Surface pointer associated with a specific OpenGL texture.  Currently the DirectX shared surfaces are hard coded to be exactly the same size as the video clips.  You have been warned :->  Notice that the StretchRect() call is in between IDirect3D9Device::BeginScene() and IDirect3D9Device::EndScene().  Basically, we have a very small DirectX render loop here.  Once we are done with DirectX we need to lock our shared surfaces using NV_DX_Interop before we being our OpenGL rendering.  The USESHADER define enables the use of vertex/fragment shaders during rendering.  This is on by default in this code.  You can disable the shaders by commenting out USESHADER in stdafx.h if you need to.  For our shader rendering path, we bind all of our video textures to our uniform shader variables, calculate for zoom/pan, and just draw a single quad.  The vertex shader / fragment shader handles the rest.  Without the shader, the code is a little less efficient.  Multiple quads are draw to the screen and we swap or textures one at a time while drawing.  Zoom / Pan do not work without the shader.  When we are done rendering our scene we unlock our shared surfaces using the NV_DX_Interop extension.
+* @return None.
+*/    
+void display()
+{
+	HRESULT hr = S_OK;
+	for(int decodeclipcounter = 0; decodeclipcounter < MAXVIDEOCLIPS; decodeclipcounter++) {
+		videoframeptrs[decodeclipcounter] = NULL;
+		videoframeptrs[decodeclipcounter] = (LPDIRECT3DSURFACE9) PipelinePtrs[decodeclipcounter]->RunSingleFrameDecode();
+	}
+	hr = testdx->GetDevice()->BeginScene();	
+	if (FAILED(hr)) {
+		return;
+	}
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		//D3DSURFACE_DESC desc;
+		//hr = testdx->GetSharedSurface(i)->GetDesc(&desc);
+		hr = testdx->GetDevice()->StretchRect(videoframeptrs[i], NULL, testdx->GetSharedSurface(i),NULL, D3DTEXF_NONE);
+		if (FAILED(hr)) {
+			MessageBox(NULL,L"THE VIDEO SIZE DOES NOT MATCH THE DX TEXTURE SIZE!",L"SURFACE SIZE MISMATCH",MB_OK);
+			return;
+		}
+	}
+	hr = testdx->GetDevice()->EndScene();
+	if (FAILED(hr))
+		return;
+	wglMakeCurrent(hDC, hRC);
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		wglDXLockObjectsNV(m_hH264DeviceArray[i], 1, &m_hH264TextureArray[i]);
+	}
+#ifdef USESHADER	
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, m_cx, m_cy, 0, -1, 1);
+	glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+	glEnable(GL_TEXTURE_2D);
+    glPushMatrix();
+	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glUseProgram (shader_programme);
+
+#if 0
+
+	for (int i = 0; i < 1; i++) {
+		glActiveTexture(GL_TEXTURE0 + i);
+		glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[i]);
+		glUniform1i(testdtexArray[0], i);
+
+		glUniform1f(testxoffset, xoffsetcurrent);
+		glUniform1f(testyoffset, yoffsetcurrent);
+
+
+
+		glBegin(GL_QUADS);
+		glTexCoord2d(1.0f, 1.0f); glVertex2f(-1, -1);
+		glTexCoord2d(1.0f, 0.0f); glVertex2f(-1, 1);
+		glTexCoord2d(0.0f, 0.0f); glVertex2f(1, 1);
+		glTexCoord2d(0.0f, 1.0f); glVertex2f(1, -1);
+		glEnd();
+
+	}
+
+#else
+
+
+#if 1
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		glActiveTexture(GL_TEXTURE0 + i);
+		glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[i]);
+		glUniform1i(testdtexArray[i],i);
+	}
+#else
+	glActiveTexture(GL_TEXTURE0 + 0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[0]);
+	glUniform1i(testdtexArray[0], 0);
+#endif
+	glUniform1f(testxoffset, xoffsetcurrent);
+	glUniform1f(testyoffset, yoffsetcurrent);
+	glUniform1f(texcoordscalar,apptexcoordscalar);
+	glUniform1f(xtexcoordmultiplier,appxtexcoordmultiplier);
+	glUniform1f(ytexcoordmultiplier,appytexcoordmultiplier);
+	glUniform1f(numvideos,appnumvideos);
+
+	float box = nZoom;
+	float aspect = 1.0f;
+	float xval = box;
+	float yval = box*aspect;
+	glBegin(GL_QUADS);
+	glTexCoord2f(1.0f, 1.0f); glVertex2f(-xval, -yval);
+	glTexCoord2f(1.0f, 0.0f); glVertex2f(-xval, yval);
+	glTexCoord2f(0.0f, 0.0f); glVertex2f(xval, yval);
+	glTexCoord2f(0.0f, 1.0f); glVertex2f(xval, -yval);
+	glEnd();
+#endif
+#else
+	glViewport(0, 0, m_cx, m_cy);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, m_cx, m_cy, 0, -1, 1);
+    glDisable(GL_DEPTH_TEST);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+	glEnable(GL_TEXTURE_2D);
+    glPushMatrix();
+	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	GLfloat xdiv = 3.0;
+	GLfloat ydiv = 2.0;
+	GLfloat unitx = m_cx/xdiv;
+	GLfloat unity = m_cy/ydiv;
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[0]);
+	glBegin(GL_QUADS);
+	glTexCoord2d(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
+	glTexCoord2d(0.0f, 1.0f); glVertex2f(0.0f, (GLfloat)unity);
+	glTexCoord2d(1.0f, 1.0f); glVertex2f((GLfloat)unitx, (GLfloat)unity);
+	glTexCoord2d(1.0f, 0.0f); glVertex2f((GLfloat)unitx, 0.0f);
+	glEnd();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[1]);
+	glBegin(GL_QUADS);
+	glTexCoord2d(0.0f, 0.0f); glVertex2f((GLfloat)unitx, 0.0f);
+	glTexCoord2d(0.0f, 1.0f); glVertex2f((GLfloat)unitx, (GLfloat)unity);
+	glTexCoord2d(1.0f, 1.0f); glVertex2f((GLfloat)unitx*2.0, (GLfloat)unity);
+	glTexCoord2d(1.0f, 0.0f); glVertex2f((GLfloat)unitx*2.0, 0.0f);
+	glEnd();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[2]);
+	glBegin(GL_QUADS);
+	glTexCoord2d(0.0f, 0.0f); glVertex2f((GLfloat)unitx*2.0, 0.0f);
+	glTexCoord2d(0.0f, 1.0f); glVertex2f((GLfloat)unitx*2.0, (GLfloat)unity);
+	glTexCoord2d(1.0f, 1.0f); glVertex2f((GLfloat)unitx*3.0, (GLfloat)unity);
+	glTexCoord2d(1.0f, 0.0f); glVertex2f((GLfloat)unitx*3.0, 0.0f);
+	glEnd();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[3]);
+	glBegin(GL_QUADS);
+	glTexCoord2d(0.0f, 0.0f); glVertex2f(0.0f, (GLfloat)unity);
+	glTexCoord2d(0.0f, 1.0f); glVertex2f(0.0f, (GLfloat)unity*2.0);
+	glTexCoord2d(1.0f, 1.0f); glVertex2f((GLfloat)unitx, (GLfloat)unity*2.0);
+	glTexCoord2d(1.0f, 0.0f); glVertex2f((GLfloat)unitx, (GLfloat)unity);
+	glEnd();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[4]);
+	glBegin(GL_QUADS);
+	glTexCoord2d(0.0f, 0.0f); glVertex2f((GLfloat)unitx, (GLfloat)unity);
+	glTexCoord2d(0.0f, 1.0f); glVertex2f((GLfloat)unitx, (GLfloat)unity*2.0);
+	glTexCoord2d(1.0f, 1.0f); glVertex2f((GLfloat)unitx*2.0, (GLfloat)unity*2.0);
+	glTexCoord2d(1.0f, 0.0f); glVertex2f((GLfloat)unitx*2.0, (GLfloat)unity);
+	glEnd();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[5]);
+	glBegin(GL_QUADS);
+	glTexCoord2d(0.0f, 0.0f); glVertex2f((GLfloat)unitx*2.0, (GLfloat)unity);
+	glTexCoord2d(0.0f, 1.0f); glVertex2f((GLfloat)unitx*2.0, (GLfloat)unity*2.0);
+	glTexCoord2d(1.0f, 1.0f); glVertex2f((GLfloat)unitx*3.0, (GLfloat)unity*2.0);
+	glTexCoord2d(1.0f, 0.0f); glVertex2f((GLfloat)unitx*3.0, (GLfloat)unity);
+	glEnd();
+#endif
+	glPopMatrix();
+	SwapBuffers(hDC);
+    glFlush();
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		wglDXUnlockObjectsNV(m_hH264DeviceArray[i], 1, &m_hH264TextureArray[i]);
+	}
+	wglMakeCurrent(NULL,NULL);
+	framecounter++;
+}
+/**
+* setupglfuncptrs() - Grab function pointers to everything we need to write this application.  Including NV_DX_Interop functions.  
+* @return None.
+*/
+void setupglfuncptrs()
+{
+	wglMakeCurrent(hDC, hRC);
+	glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)wglGetProcAddress("glGetUniformLocation");
+	glCreateProgram = (PFNGLCREATEPROGRAMPROC)wglGetProcAddress("glCreateProgram");
+	glUniform1i = (PFNGLUNIFORM1IPROC)wglGetProcAddress("glUniform1i");
+	glDeleteProgram = (PFNGLDELETEPROGRAMPROC)wglGetProcAddress("glDeleteProgram");
+	glUniform1iv = (PFNGLUNIFORM1IVPROC)wglGetProcAddress("glUniform1iv");
+	glUseProgram = (PFNGLUSEPROGRAMPROC)wglGetProcAddress("glUseProgram");
+	glUniform2iv = (PFNGLUNIFORM2IVPROC)wglGetProcAddress("glUniform2iv");
+	glAttachShader = (PFNGLATTACHSHADERPROC)wglGetProcAddress("glAttachShader");
+	glUniform3iv = (PFNGLUNIFORM3IVPROC)wglGetProcAddress("glUniform3iv");
+	glDetachShader = (PFNGLDETACHSHADERPROC)wglGetProcAddress("glDetachShader");
+	glUniform4iv = (PFNGLUNIFORM4IVPROC)wglGetProcAddress("glUniform4iv");
+	glLinkProgram = (PFNGLLINKPROGRAMPROC)wglGetProcAddress("glLinkProgram");
+	glUniform1f = (PFNGLUNIFORM1FPROC)wglGetProcAddress("glUniform1f");
+	glGetProgramiv = (PFNGLGETPROGRAMIVPROC)wglGetProcAddress("glGetProgramiv");
+	glUniform1fv = (PFNGLUNIFORM1FVPROC)wglGetProcAddress("glUniform1fv");
+	glGetShaderInfoLog = (PFNGLGETSHADERINFOLOGPROC)wglGetProcAddress("glGetShaderInfoLog");
+	glUniform2fv = (PFNGLUNIFORM2FVPROC)wglGetProcAddress("glUniform2fv");
+	glGetAttribLocation = (PFNGLGETATTRIBLOCATIONPROC)wglGetProcAddress("glGetAttribLocation");
+	glUniform3fv = (PFNGLUNIFORM3FVPROC)wglGetProcAddress("glUniform3fv");
+	glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FVPROC)wglGetProcAddress("glUniformMatrix4fv");
+	glVertexAttrib1f = (PFNGLVERTEXATTRIB1FPROC)wglGetProcAddress("glVertexAttrib1f");
+	glVertexAttrib2fv = (PFNGLVERTEXATTRIB2FVPROC)wglGetProcAddress("glVertexAttrib2fv");
+	glUniform4fv = (PFNGLUNIFORM4FVPROC)wglGetProcAddress("glUniform4fv");
+	glEnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)wglGetProcAddress("glEnableVertexAttribArray");
+	glVertexAttrib1fv = (PFNGLVERTEXATTRIB1FVPROC)wglGetProcAddress("glVertexAttrib1fv");
+	glVertexAttrib4fv = (PFNGLVERTEXATTRIB4FVPROC)wglGetProcAddress("glVertexAttrib4fv");
+	glBindAttribLocation = (PFNGLBINDATTRIBLOCATIONPROC)wglGetProcAddress("glBindAttribLocation");
+	glActiveTexture = (PFNGLACTIVETEXTUREPROC)wglGetProcAddress("glActiveTexture");
+	glVertexAttrib3fv = (PFNGLVERTEXATTRIB3FVPROC)wglGetProcAddress("glVertexAttrib3fv");
+	glCreateShader = (PFNGLCREATESHADERPROC)wglGetProcAddress("glCreateShader");
+	glShaderSource = (PFNGLSHADERSOURCEPROC)wglGetProcAddress("glShaderSource");
+	glDeleteShader = (PFNGLDELETESHADERPROC)wglGetProcAddress("glDeleteShader");
+	glGetShaderiv = (PFNGLGETSHADERIVPROC)wglGetProcAddress("glGetShaderiv");
+	glCompileShader = (PFNGLCOMPILESHADERPROC)wglGetProcAddress("glCompileShader");
+	glGenBuffers = (PFNGLGENBUFFERSPROC)wglGetProcAddress("glGenBuffers");
+	glBufferData = (PFNGLBUFFERDATAPROC)wglGetProcAddress("glBufferData");
+	glVertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)wglGetProcAddress("glVertexAttribPointer");
+	glBindBuffer = (PFNGLBINDBUFFERPROC)wglGetProcAddress("glBindBuffer");
+	wglDXSetResourceShareHandleNV = (PFNWGLDXSETRESOURCESHAREHANDLENVPROC)wglGetProcAddress("wglDXSetResourceShareHandleNV");
+	wglDXOpenDeviceNV = (PFNWGLDXOPENDEVICENVPROC)wglGetProcAddress("wglDXOpenDeviceNV");
+	wglDXCloseDeviceNV = (PFNWGLDXCLOSEDEVICENVPROC)wglGetProcAddress("wglDXCloseDeviceNV");
+	wglDXRegisterObjectNV = (PFNWGLDXREGISTEROBJECTNVPROC)wglGetProcAddress("wglDXRegisterObjectNV");
+	wglDXUnregisterObjectNV = (PFNWGLDXUNREGISTEROBJECTNVPROC)wglGetProcAddress("wglDXUnregisterObjectNV");
+	wglDXObjectAccessNV = (PFNWGLDXOBJECTACCESSNVPROC)wglGetProcAddress("wglDXObjectAccessNV");
+	wglDXLockObjectsNV = (PFNWGLDXLOCKOBJECTSNVPROC)wglGetProcAddress("wglDXLockObjectsNV");
+	wglDXUnlockObjectsNV = (PFNWGLDXUNLOCKOBJECTSNVPROC)wglGetProcAddress("wglDXUnlockObjectsNV");
+	wglMakeCurrent(NULL,NULL);
+}
+/**
+* cleanupogl() - Clean up after OpenGL.  Delete our textures, delete our shaders, delete the shader program.
+* @return None.
+*/
+void cleanupogl() 
+{
+	wglMakeCurrent(hDC, hRC);
+	if (m_bTextureInitialized) {
+		for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+			glDeleteTextures(1, &m_h264TextureArray[i]);
+		}
+	}
+	glDetachShader(shader_programme, glfragmentshader);
+	glDetachShader(shader_programme, glvertexshader);
+	glDeleteProgram(shader_programme);
+	shader_programme = NULL;
+	glfragmentshader = NULL;
+	glvertexshader = NULL;
+	wglMakeCurrent(NULL, NULL);
+}
+/**
+* initdx() - Initializes DirectX using the hWnd for the OpenGL window.  Make the DirectX context the same width / height as the OpenGL context.
+* @return None.
+*/
+void initdx(int width, int height, HINSTANCE hInstance, HWND eHwnd)
+{
+	testdx = new SimpleDXDevice();
+	testdx->CreateDevice(width,height,0,hInstance,eHwnd);
+}
+/**
+* cleanupdx() - Clean up after DirectX.  All textures etc are destroying within the destructor.
+* @return None.
+*/
+void cleanupdx()
+{
+	delete testdx;
+	testdx = NULL;
+}
+/**
+* initvideo() - Initialize a huge number of parameters for our video decoder pipeline.
+* @return None.
+*/
+void initvideo()
+{
+	for(int clipparamcounter = 0; clipparamcounter < MAXVIDEOCLIPS; clipparamcounter++) {
+		ParamsPtrs[clipparamcounter] = NULL;
+		ParamsPtrs[clipparamcounter] = new sInputParams();
+		ParamsPtrs[clipparamcounter]->videoType = MFX_CODEC_AVC;
+		ParamsPtrs[clipparamcounter]->bOutput = false;
+		ParamsPtrs[clipparamcounter]->memType = D3D9_MEMORY;
+		ParamsPtrs[clipparamcounter]->bUseHWLib = true;
+		ParamsPtrs[clipparamcounter]->bIsMVC = false;
+		ParamsPtrs[clipparamcounter]->bRendering = true;
+		ParamsPtrs[clipparamcounter]->bLowLat = false;
+		ParamsPtrs[clipparamcounter]->bCalLat = false;
+		ParamsPtrs[clipparamcounter]->nWallCell = 0;
+		ParamsPtrs[clipparamcounter]->nWallW = 0;
+		ParamsPtrs[clipparamcounter]->nWallH = 0;
+		ParamsPtrs[clipparamcounter]->nWallMonitor = 0;
+		ParamsPtrs[clipparamcounter]->nWallFPS = 0;
+		ParamsPtrs[clipparamcounter]->bWallNoTitle = false;
+		ParamsPtrs[clipparamcounter]->nWallTimeout = 0;
+		ParamsPtrs[clipparamcounter]->numViews = 0;
+		ParamsPtrs[clipparamcounter]->nRotation = 0;
+		ParamsPtrs[clipparamcounter]->externallycreatedd3d9context = NULL;
+		ParamsPtrs[clipparamcounter]->externallycreatedd3d9deviceptr = NULL;
+		ParamsPtrs[clipparamcounter]->externallycreatedd3d9pp = NULL;
+		msdk_strcopy(ParamsPtrs[clipparamcounter]->strSrcFile, videoclips[clipparamcounter]);
+	}	
+}
+/**
+* createvideo() - Create the individual video decoders for our application. Use the simpleDX9Device class to grab most of the parameters. Call init on each of our decoders using our parameter structures.
+* @return None.
+*/
+void createvideo()
+{
+	for(int clipcounter = 0; clipcounter < MAXVIDEOCLIPS; clipcounter++) {
+	PipelinePtrs[clipcounter] = NULL;
+	PipelinePtrs[clipcounter] = new CDecodingPipeline();
+	}
+	for(int videoframecounter = 0; videoframecounter < MAXVIDEOCLIPS; videoframecounter++) {
+		videoframeptrs[videoframecounter] = NULL;
+	}
+	D3DPRESENT_PARAMETERS temppp = testdx->SDXDGetD3D9PresentParameters();
+	for(int externalparamcounter = 0;externalparamcounter < MAXVIDEOCLIPS;externalparamcounter++) {
+		ParamsPtrs[externalparamcounter]->externallycreatedd3d9deviceptr = (void *)(testdx->SDXDGetD3D9Device());
+		ParamsPtrs[externalparamcounter]->externallycreatedd3d9context = (void *)(testdx->SDXDGetD3D9Object());
+		ParamsPtrs[externalparamcounter]->externallycreatedd3d9pp = (void *)(&(temppp));
+		if(testdx->SDXDIsWindowed()) {
+			ParamsPtrs[externalparamcounter]->externallycreatedhwnd = (void *)(testdx->SDXDGetHWNDDeviceWindowed());
+		}
+		else {
+			ParamsPtrs[externalparamcounter]->externallycreatedhwnd = (void *)(testdx->SDXDGetHWNDDeviceFullScreen());
+		}
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.bFullScreen = !testdx->SDXDIsWindowed();
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.dwStyle = WS_POPUP|WS_BORDER|WS_MAXIMIZE|WS_OVERLAPPEDWINDOW;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.hInstance = testdx->SDXDGetHINSTANCE();
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.hMenu = NULL;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.hWndParent = NULL;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.lpClassName = MSDK_STRING("Render Window Class");
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.lpParam = NULL;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.lpWindowName = testdx->SDXDGetWindowTitle();
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.nAdapter = ParamsPtrs[externalparamcounter]->nWallMonitor;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.ncell = ParamsPtrs[externalparamcounter]->nWallCell;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.nHeight = testdx->SDXDGetWindowHeight();
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.nMaxFPS = ParamsPtrs[externalparamcounter]->nWallFPS;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.nWidth = testdx->SDXDGetWindowWidth();
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.nx = ParamsPtrs[externalparamcounter]->nWallW;
+		ParamsPtrs[externalparamcounter]->externallycreatedsparams.ny = ParamsPtrs[externalparamcounter]->nWallH;
+	}
+	for(int initclipcounter = 0; initclipcounter < MAXVIDEOCLIPS; initclipcounter++) {
+		sts = PipelinePtrs[initclipcounter]->Init(ParamsPtrs[initclipcounter]);
+	}
+}
+/**
+* cleanupvideo() - Delete the video decoders and the related parameter structures.
+* @return None.
+*/
+void cleanupvideo()
+{
+	for(int delpipeline = 0; delpipeline < MAXVIDEOCLIPS; delpipeline++) {
+		if(PipelinePtrs[delpipeline] != NULL) {
+			delete PipelinePtrs[delpipeline];
+			PipelinePtrs[delpipeline] = NULL;
+		}
+	}
+	for(int clipparamcounter = 0; clipparamcounter < MAXVIDEOCLIPS; clipparamcounter++) {
+		delete ParamsPtrs[clipparamcounter];
+		ParamsPtrs[clipparamcounter] = NULL;
+	}
+}
+/**
+* creatogltexture() - Create our OpenGL textures.  If the textures are alreaedy create, delete them and recreate.  Could be done in a loop, but I did it this way because I was feeling lazy and just wanted to see this work.
+* @return None.
+*/
+void creatogltexture(void)
+{
+	wglMakeCurrent(hDC, hRC);
+	if (m_bTextureInitialized) {
+		for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+			glDeleteTextures(1, &m_h264TextureArray[i]);
+		}
+	}
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		glGenTextures(1, &m_h264TextureArray[i]);
+		glBindTexture(GL_TEXTURE_2D, m_h264TextureArray[i]);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		//glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+		//glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_cx, m_cy, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+		GLenum err = glGetError();
+		if(err) msdk_printf(MSDK_STRING("glTexImage2D\n"));
+	}
+	m_bTextureInitialized = TRUE;
+	wglMakeCurrent(NULL, NULL);
+}
+/**
+* bindtexture() - Bind a DirectX surface to an OpenGL texture using the NV_DX_Interop extension.
+* @param pSimpleDxDevice Poitner to our simple DirectX device class.  This class holds our DirectX handles to the shared surfaces.
+* @param texture The OpenGL texture we want to bind to a DirectX texture using NV_DX_Interop.
+* @param hDevice This value is returned by NV_DX_Interop.  Keep track of it.
+* @param hTexture This value is returned by NV_DX_Interop.  Keep track of it.
+* @return None.
+*/
+bool bindtexture(SimpleDXDevice *pSimpleDxDevice, GLuint texture, HANDLE& hDevice, HANDLE& hTexture, int surfid)
+{
+	wglMakeCurrent(hDC, hRC);
+    if (WGL_NV_DX_interop) {
+		hDevice = NULL;
+		hDevice = wglDXOpenDeviceNV(pSimpleDxDevice->GetDevice());
+        if (hDevice) {
+			IDirect3DSurface9 *pSurface = NULL;
+			HANDLE hSurface = NULL;
+			pSurface = pSimpleDxDevice->GetSharedSurface(surfid);
+			hSurface = pSimpleDxDevice->GetSharedHandle(surfid);
+			BOOL success = wglDXSetResourceShareHandleNV(pSurface, hSurface);
+			hTexture = wglDXRegisterObjectNV(hDevice, pSurface,texture, GL_TEXTURE_2D, WGL_ACCESS_READ_ONLY_NV);
+			if (hTexture == NULL)
+				return false;
+        }
+		else
+			return false;		
+    }
+
+	wglMakeCurrent(NULL, NULL);
+	return true;
+}
+/**
+* unbindtexture() - Unbinds all of the shared OpenGL/DirectX textures in this application using NV_DX_Interop.
+* @return Pass/Fail status.
+*/
+bool unbindtexture()
+{
+	wglMakeCurrent(hDC, hRC);
+	if (WGL_NV_DX_interop) {
+		for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+			if (m_hH264TextureArray[i]) {
+				wglDXUnregisterObjectNV(m_hH264DeviceArray[i], m_hH264TextureArray[i]);
+				m_hH264TextureArray[i] = NULL;
+			}
+		}
+	}
+	wglMakeCurrent(NULL, NULL);
+	return true;
+}
+
+// Read a shader source from a file
+// store the shader source in a std::vector<char>
+GLuint read_shader_src(const char *fname, std::vector<char> &buffer) {
+	std::ifstream in;
+	in.open(fname, std::ios::binary);
+
+	if (in.is_open()) {
+		// Get the number of bytes stored in this file
+		in.seekg(0, std::ios::end);
+		size_t length = (size_t)in.tellg();
+
+		// Go to start of the file
+		in.seekg(0, std::ios::beg);
+
+		// Read the content of the file in a buffer
+		buffer.resize(length + 1);
+		in.read(&buffer[0], length);
+		in.close();
+		// Add a valid C - string end
+		buffer[length] = '\0';
+	}
+	else {
+		std::cerr << "Unable to open " << fname << " I'm out!" << std::endl;
+		return 0;
+	}
+
+	return 1;
+}
+
+// Compile a shader
+GLuint load_and_compile_shader(const char *fname, GLenum shaderType) {
+	// Load a shader from an external file
+	std::vector<char> buffer;
+	GLuint ret = read_shader_src(fname, buffer);
+	if (ret == 0) return 0;
+
+	const char *src = &buffer[0];
+	// Compile the shader
+	GLuint shader = glCreateShader(shaderType);
+	glShaderSource(shader, 1, &src, NULL);
+	glCompileShader(shader);
+	// Check the result of the compilation
+	GLint test;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &test);
+	if (!test) {
+		std::cerr << "Shader compilation failed with this message:" << std::endl;
+		std::vector<char> compilation_log(512);
+		glGetShaderInfoLog(shader, compilation_log.size(), NULL, &compilation_log[0]);
+		std::cerr << &compilation_log[0] << std::endl;
+		glDeleteShader(shader);
+		return 0;
+	}
+	return shader;
+}
+
+// Create a program from two shaders
+GLuint create_program(const char *path_vert_shader, const char *path_frag_shader) {
+	// Load and compile the vertex and fragment shaders
+	GLuint vertexShader = load_and_compile_shader(path_vert_shader, GL_VERTEX_SHADER);
+	if (vertexShader == 0) return 0;
+
+	GLuint fragmentShader = load_and_compile_shader(path_frag_shader, GL_FRAGMENT_SHADER);
+	if (fragmentShader == 0)
+	{
+		if (vertexShader) glDeleteShader(vertexShader);
+		return 0;
+	}
+
+	// Attach the above shader to a program
+	GLuint shaderProgram = glCreateProgram();
+	glAttachShader(shaderProgram, vertexShader);
+	glAttachShader(shaderProgram, fragmentShader);
+
+	//
+	//glBindAttribLocation(shaderProgram, 1, "pos");
+	//glBindAttribLocation(shaderProgram, 0, "vTexCoord");
+
+	// Link and use the program
+	glLinkProgram(shaderProgram);
+
+	// Flag the shaders for deletion
+	glDeleteShader(vertexShader);
+	glDeleteShader(fragmentShader);
+
+	// Check the result of the linking
+	GLint test;
+	glGetProgramiv(shaderProgram, GL_LINK_STATUS, &test);
+	if (!test) {
+		std::cerr << "Shader compilation failed with this message:" << std::endl;
+		std::vector<char> linking_log(512);
+		glGetShaderInfoLog(shaderProgram, linking_log.size(), NULL, &linking_log[0]);
+		std::cerr << &linking_log[0] << std::endl;
+		glDeleteShader(vertexShader);
+		glDeleteShader(fragmentShader);
+		glDeleteProgram(shaderProgram);
+		return 0;
+	}
+
+	glUseProgram(shaderProgram);
+
+	return shaderProgram;
+}
+
+/**
+* createshaders() - Create our shaders, combine them into a program and then grab all of our uniform variables.
+* @return Pass/Fail status.
+*/
+bool createshaders()
+{
+	wglMakeCurrent(hDC, hRC);
+#if 0
+	glvertexshader = glCreateShader (GL_VERTEX_SHADER);
+	glShaderSource (glvertexshader, 1, &vertex_shader, NULL);
+	glCompileShader (glvertexshader);
+	GLenum err = glGetError();
+	if (err) msdk_printf(MSDK_STRING("fragment_shader\n"));
+	glfragmentshader = glCreateShader (GL_FRAGMENT_SHADER);
+	glShaderSource (glfragmentshader, 1, &fragment_shader, NULL);
+	glCompileShader (glfragmentshader);
+	err = glGetError();
+	if (err) msdk_printf(MSDK_STRING("fragment_shader\n"));
+	shader_programme = glCreateProgram ();
+	glAttachShader (shader_programme, glfragmentshader);
+	glAttachShader (shader_programme, glvertexshader);
+	glLinkProgram (shader_programme);
+#else
+	shader_programme = create_program("vert_mix.glsl", "frag_mix.glsl");
+	if (shader_programme == 0) return false;
+#endif
+
+#if 0
+	testxoffset = glGetUniformLocation(shader_programme, "xoffset");
+	testyoffset = glGetUniformLocation(shader_programme, "yoffset");
+	testdtexArray[0] = glGetUniformLocation(shader_programme, "dtex");
+#else
+	char *texsampler = new char[256];
+	for(int i = 0; i < MAXVIDEOCLIPS; i++) {
+		sprintf(texsampler,"dtex[%d]",i);
+		//sprintf(texsampler, "dtex");
+		testdtexArray[i] = glGetUniformLocation( shader_programme, texsampler);
+	}
+	delete texsampler;
+	testxoffset = glGetUniformLocation(shader_programme, "xoffset");
+	testyoffset = glGetUniformLocation(shader_programme, "yoffset");
+	texcoordscalar = glGetUniformLocation(shader_programme, "texcoordscalar");
+	xtexcoordmultiplier = glGetUniformLocation(shader_programme, "xtexcoordmultiplier");
+	ytexcoordmultiplier = glGetUniformLocation(shader_programme, "ytexcoordmultiplier");
+	numvideos = glGetUniformLocation(shader_programme, "numvideos");
+#endif
+	return true;
+}

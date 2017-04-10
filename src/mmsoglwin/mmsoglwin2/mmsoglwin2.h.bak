@@ -1,0 +1,41 @@
+/*
+Copyright (c) 2016, Intel Corporation All Rights Reserved.
+ 
+The source code, information and material ("Material") contained herein is owned by Intel Corporation 
+or its suppliers or licensors, and title to such Material remains with Intel Corporation or its 
+suppliers or licensors. The Material contains proprietary information of Intel or its suppliers 
+and licensors. The Material is protected by worldwide copyright laws and treaty provisions. No part of 
+the Material may be used, copied, reproduced, modified, published, uploaded, posted, transmitted, 
+distributed or disclosed in any way without Intel's prior express written permission. 
+No license under any patent, copyright or other intellectual property rights in the Material is granted 
+to or conferred upon you, either expressly, by implication, inducement, estoppel or otherwise. Any 
+license under such intellectual property rights must be express and approved by Intel in writing.
+ 
+Unless otherwise agreed by Intel in writing, you may not remove or alter this notice or any other 
+notice embedded in Materials by Intel or Intels suppliers or licensors in any way.*/
+#pragma once
+
+#include "resource.h"
+#include <SDKDDKVer.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdlib.h>
+#include <malloc.h>
+#include <memory.h>
+#include <tchar.h>
+#define SECOND_TIMER 15
+#define WINDOWWIDTH 1280
+#define WINDOWHEIGHT 720
+#define MAX_LOADSTRING 100
+#define MAXPOSSIBLEVIDEOS 25
+#define MAXVIDEOCLIPS 16
+#define NUMVIDEOROW 4
+#define NUMVIDEOCOL 4
+#define USESHADER  1
+#define FPS_RESOLUTION 1000
+#define MIX4K_GP 0
+#define MIX1280 1
+#define MIX1080 0
+#define MIX2560 0
+
+#define USEOFFSCREEN 1
